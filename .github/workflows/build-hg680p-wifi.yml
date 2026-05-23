@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       openwrt_kernel:
-        description: "Kernel version (6.6.y recommended for WiFi stability)"
+        description: "Kernel version (6.6.y recommended)"
         required: true
         default: "6.6.y"
         type: choice
@@ -12,11 +12,6 @@ on:
           - 6.6.y
           - 6.1.y
           - 6.12.y
-      openwrt_ip:
-        description: "Default IP address"
-        required: true
-        default: "192.168.1.1"
-        type: string
       wifi_ssid:
         description: "Default WiFi SSID"
         required: true
@@ -42,12 +37,11 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     if: github.event.repository.owner.id == github.event.sender.id
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Initialization environment
+      - name: Init environment
         id: init
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -64,7 +58,7 @@ jobs:
           echo "status=success" >> ${GITHUB_OUTPUT}
           echo "build_date=$(date +"%Y.%m.%d")" >> ${GITHUB_OUTPUT}
 
-      - name: Create simulated physical disk
+      - name: Create disk
         run: |
           mnt_size=$(expr $(df -h /mnt | tail -1 | awk '{print $4}' | sed 's/[[:alpha:]]//g' | sed 's/\..*//') - 1)
           root_size=$(expr $(df -h / | tail -1 | awk '{print $4}' | sed 's/[[:alpha:]]//g' | sed 's/\..*//') - 4)
@@ -80,113 +74,30 @@ jobs:
           sudo mkdir -p /builder
           sudo mount /dev/github/runner /builder
           sudo chown -R runner:runner /builder
-          df -Th
 
-      - name: Build OpenWrt rootfs with ImageBuilder (includes WiFi packages)
+      - name: Build rootfs with ImageBuilder
         id: imagebuilder
         run: |
-          mkdir -p /builder/openwrt
-          cd /builder/openwrt
-
-          # Download OpenWrt ImageBuilder
+          mkdir -p /builder/openwrt && cd /builder/openwrt
           IB_FILE="openwrt-imagebuilder-${{ env.OPENWRT_VERSION }}-armsr-armv8.Linux-x86_64.tar.zst"
-          IB_URL="https://downloads.openwrt.org/releases/${{ env.OPENWRT_VERSION }}/targets/armsr/armv8/${IB_FILE}"
-          echo "Downloading ImageBuilder: ${IB_URL}"
-          curl -fsSLO "${IB_URL}"
-          tar --use-compress-program=unzstd -xf "${IB_FILE}"
-          rm -f "${IB_FILE}"
-
-          # Enter ImageBuilder directory
-          IB_DIR=$(ls -d openwrt-imagebuilder-* | head -1)
-          cd "${IB_DIR}"
-
-          # Create custom files directory with WiFi config
+          curl -fsSLO "https://downloads.openwrt.org/releases/${{ env.OPENWRT_VERSION }}/targets/armsr/armv8/${IB_FILE}"
+          tar --use-compress-program=unzstd -xf "${IB_FILE}" && rm -f "${IB_FILE}"
+          cd openwrt-imagebuilder-*/
           mkdir -p files/etc/uci-defaults
-          cat > files/etc/uci-defaults/99-hg680p-wifi <<'WIFIEOF'
-#!/bin/sh
-# HG680P WiFi Auto-Configuration (RTL8723BS optimized for 50Mbps)
-sleep 3
-modprobe r8723bs 2>/dev/null || modprobe rtl8723bs 2>/dev/null || true
-sleep 2
-uci set wireless.radio0=wifi-device
-uci set wireless.radio0.type='mac80211'
-uci set wireless.radio0.channel='6'
-uci set wireless.radio0.htmode='HT40'
-uci set wireless.radio0.band='2g'
-uci set wireless.radio0.disabled='0'
-uci set wireless.radio0.country='ID'
-uci set wireless.radio0.txpower='20'
-uci set wireless.radio0.cell_density='0'
-uci set wireless.default_radio0=wifi-iface
-uci set wireless.default_radio0.device='radio0'
-uci set wireless.default_radio0.network='lan'
-uci set wireless.default_radio0.mode='ap'
-uci set wireless.default_radio0.ssid='__WIFI_SSID__'
-uci set wireless.default_radio0.encryption='psk2'
-uci set wireless.default_radio0.key='__WIFI_PASS__'
-uci set wireless.default_radio0.disassoc_low_ack='0'
-uci commit wireless
-# Kernel network optimization for WiFi throughput
-cat >> /etc/sysctl.conf <<'SYSCTL'
-# HG680P WiFi Performance Tuning
-net.core.rmem_max=16777216
-net.core.wmem_max=16777216
-net.core.rmem_default=1048576
-net.core.wmem_default=1048576
-net.core.netdev_max_backlog=5000
-net.ipv4.tcp_fastopen=3
-net.ipv4.tcp_mtu_probing=1
-SYSCTL
-sysctl -p /etc/sysctl.conf 2>/dev/null
-echo "r8723bs" >> /etc/modules.d/rtl8723bs 2>/dev/null || true
-exit 0
-WIFIEOF
+          # Write WiFi setup script using printf (no heredoc)
+          printf '#!/bin/sh\nsleep 3\nmodprobe r8723bs 2>/dev/null || true\nsleep 2\nuci set wireless.radio0=wifi-device\nuci set wireless.radio0.type=mac80211\nuci set wireless.radio0.channel=6\nuci set wireless.radio0.htmode=HT40\nuci set wireless.radio0.band=2g\nuci set wireless.radio0.disabled=0\nuci set wireless.radio0.country=ID\nuci set wireless.radio0.txpower=20\nuci set wireless.default_radio0=wifi-iface\nuci set wireless.default_radio0.device=radio0\nuci set wireless.default_radio0.network=lan\nuci set wireless.default_radio0.mode=ap\nuci set wireless.default_radio0.ssid=${{ inputs.wifi_ssid }}\nuci set wireless.default_radio0.encryption=psk2\nuci set wireless.default_radio0.key=${{ inputs.wifi_password }}\nuci set wireless.default_radio0.disassoc_low_ack=0\nuci commit wireless\necho r8723bs >> /etc/modules.d/rtl8723bs 2>/dev/null || true\nexit 0\n' > files/etc/uci-defaults/99-hg680p-wifi
           chmod +x files/etc/uci-defaults/99-hg680p-wifi
-          sed -i "s/__WIFI_SSID__/${{ inputs.wifi_ssid }}/g" files/etc/uci-defaults/99-hg680p-wifi
-          sed -i "s/__WIFI_PASS__/${{ inputs.wifi_password }}/g" files/etc/uci-defaults/99-hg680p-wifi
-
-          # Build image with WiFi packages included
-          # Key packages: kmod-rtl8723bs for the WiFi chip, hostapd/wpad for AP mode
-          make image PROFILE="generic" PACKAGES=" \
-            base-files busybox coreutils bash curl wget-ssl nano htop \
-            kmod-cfg80211 kmod-mac80211 \
-            kmod-rtl8723bs rtl8723bs-firmware \
-            wpad-basic-mbedtls wireless-tools iw iwinfo \
-            hostapd-common \
-            luci luci-base luci-mod-admin-full luci-mod-network luci-mod-status luci-mod-system \
-            luci-theme-bootstrap luci-app-firewall luci-app-package-manager \
-            luci-proto-ppp luci-proto-ipv6 \
-            luci-i18n-base-id luci-i18n-firewall-id \
-            ppp ppp-mod-pppoe \
-            dnsmasq-full iptables-nft ip6tables-nft \
-            kmod-nft-offload kmod-nft-nat \
-            block-mount kmod-fs-ext4 kmod-fs-btrfs kmod-fs-vfat \
-            kmod-usb-core kmod-usb2 kmod-usb3 kmod-usb-storage \
-            btrfs-progs dosfstools e2fsprogs fdisk parted losetup \
-            blkid lsblk mount-utils resize2fs tune2fs \
-            tar gzip unzip zstd pigz \
-            usbutils pv attr \
-            ttyd luci-app-ttyd \
-            iperf3 \
-            " FILES="files"
-
-          # Find and copy the rootfs
+          make image PROFILE="generic" PACKAGES="base-files busybox coreutils bash curl wget-ssl nano htop kmod-cfg80211 kmod-mac80211 kmod-rtl8723bs wpad-basic-mbedtls wireless-tools iw iwinfo hostapd-common luci luci-base luci-mod-admin-full luci-mod-network luci-mod-status luci-mod-system luci-theme-bootstrap luci-app-firewall luci-app-package-manager luci-proto-ppp luci-proto-ipv6 luci-i18n-base-id ppp ppp-mod-pppoe dnsmasq-full kmod-nft-offload kmod-nft-nat block-mount kmod-fs-ext4 kmod-fs-btrfs kmod-fs-vfat kmod-usb-core kmod-usb2 kmod-usb3 kmod-usb-storage btrfs-progs dosfstools e2fsprogs fdisk parted losetup blkid lsblk mount-utils resize2fs tune2fs tar gzip unzip zstd pigz usbutils pv attr ttyd luci-app-ttyd iperf3" FILES="files"
           ROOTFS=$(find bin/targets/ -name "*rootfs.tar.gz" | head -1)
-          if [[ -z "${ROOTFS}" ]]; then
-            echo "ERROR: rootfs not found in ImageBuilder output"
-            ls -la bin/targets/*/*/
-            exit 1
-          fi
-          cp "${ROOTFS}" /builder/openwrt/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-rootfs.tar.gz
-          echo "ImageBuilder rootfs created successfully"
-          ls -la /builder/openwrt/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-rootfs.tar.gz
+          [[ -n "${ROOTFS}" ]] || exit 1
+          cp "${ROOTFS}" /builder/openwrt/openwrt-armsr-armv8-rootfs.tar.gz
           echo "status=success" >> ${GITHUB_OUTPUT}
 
-      - name: Package OpenWrt for HG680P
+      - name: Package for HG680P
         if: steps.imagebuilder.outputs.status == 'success'
         uses: ophub/amlogic-s9xxx-openwrt@main
         with:
-          openwrt_path: /builder/openwrt/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-rootfs.tar.gz
+          openwrt_path: /builder/openwrt/openwrt-armsr-armv8-rootfs.tar.gz
           openwrt_board: ${{ env.OPENWRT_BOARD }}
           openwrt_kernel: ${{ inputs.openwrt_kernel }}
           auto_kernel: true
@@ -195,32 +106,20 @@ WIFIEOF
           openwrt_size: "256/1024"
           builder_name: "HG680P-WiFi"
 
-      - name: Upload firmware to Release
+      - name: Upload to Release
         if: env.PACKAGED_STATUS == 'success'
         uses: ncipollo/release-action@main
         with:
           tag: OpenWrt_HG680P_WiFi_v${{ env.OPENWRT_VERSION }}
           artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
           allowUpdates: true
-          removeArtifacts: false
           replacesArtifacts: true
           makeLatest: true
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            ## OpenWrt ${{ env.OPENWRT_VERSION }} for HG680P WiFi Optimized
-            - **Device:** FiberHome HG680P (S905X, 2GB RAM, 8GB eMMC)
-            - **Kernel:** ${{ inputs.openwrt_kernel }} LTS Stable (ophub)
-            - **WiFi:** RTL8723BS with HT40 mode, optimized for 50+ Mbps
-            - **IP:** ${{ inputs.openwrt_ip }} | **User:** root | **Pass:** password
-            - **WiFi SSID:** ${{ inputs.wifi_ssid }}
-            - **WiFi Password:** ${{ inputs.wifi_password }}
-
-            ### WiFi Packages Included
-            kmod-rtl8723bs, kmod-cfg80211, kmod-mac80211, wpad-basic-mbedtls,
-            wireless-tools, iw, iwinfo, hostapd-common, rtl8723bs-firmware
-
-            ### Installation
-            1. Write .img.gz to SD card (balenaEtcher/Rufus)
-            2. Hold reset + plug power on HG680P
-            3. Access http://${{ inputs.openwrt_ip }}
-            4. System > Amlogic Treasure Box > Install to eMMC
+            ## OpenWrt ${{ env.OPENWRT_VERSION }} for HG680P (WiFi Optimized)
+            - Device: FiberHome HG680P (S905X, 2GB RAM, 8GB eMMC)
+            - Kernel: ${{ inputs.openwrt_kernel }} LTS (ophub stable)
+            - WiFi: RTL8723BS HT40 optimized
+            - IP: 192.168.1.1 | User: root | Pass: password
+            - SSID: ${{ inputs.wifi_ssid }}
