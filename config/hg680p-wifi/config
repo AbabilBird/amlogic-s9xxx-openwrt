@@ -1,0 +1,53 @@
+﻿#=============================================================================
+# HG680P WiFi-Optimized OpenWrt 25.12.4 Build Configuration
+# Device: FiberHome HG680P (Amlogic S905X, 2GB RAM, 8GB eMMC)
+# WiFi: RTL8723BS (802.11n 2.4GHz, SDIO, optimized for 50Mbps)
+#=============================================================================
+
+#
+# 1. Applications
+#
+CONFIG_PACKAGE_luci-app-firewall=y
+CONFIG_PACKAGE_luci-app-package-manager=y
+CONFIG_PACKAGE_luci-app-ttyd=y
+CONFIG_PACKAGE_luci-app-upnp=y
+CONFIG_PACKAGE_luci-app-wol=y
+CONFIG_PACKAGE_luci-app-ddns=y
+
+#
+# 2. Themes
+#
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+
+#
+# 3. WiFi & Network Packages (Critical for HG680P WiFi)
+#
+CONFIG_PACKAGE_hostapd-openssl=y
+CONFIG_PACKAGE_wpa-supplicant-openssl=y
+CONFIG_PACKAGE_wireless-tools=y
+CONFIG_PACKAGE_iw=y
+CONFIG_PACKAGE_iwinfo=y
+CONFIG_PACKAGE_kmod-cfg80211=y
+CONFIG_PACKAGE_kmod-mac80211=y
+CONFIG_PACKAGE_kmod-rtl8723bs=y
+CONFIG_PACKAGE_rtl8723bs-firmware=y
+
+#
+# 4. Network Utilities
+#
+CONFIG_PACKAGE_iperf3=y
+CONFIG_PACKAGE_htop=y
+CONFIG_PACKAGE_nano=y
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_wget-ssl=y
+
+#
+# 5. Translate (Indonesian)
+#
+CONFIG_PACKAGE_luci-i18n-base-id=y
+CONFIG_PACKAGE_luci-i18n-firewall-id=y
+
+#
+# 6. Other Configuration
+#
+CONFIG_BUSYBOX_DEFAULT_FALLOCATE=y

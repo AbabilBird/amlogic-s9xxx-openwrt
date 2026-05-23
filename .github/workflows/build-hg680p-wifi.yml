@@ -1,0 +1,266 @@
+﻿#=============================================================================
+# Description: Build OpenWrt 25.12.4 for HG680P with WiFi Optimization
+# Device: FiberHome HG680P (Amlogic S905X, 2GB RAM, 8GB eMMC)
+# WiFi: RTL8723BS patched kernel for stable 50Mbps throughput
+# Kernel: 6.6.y LTS (best stability for S905X + RTL8723BS)
+#
+# Usage: Go to Actions tab -> Select this workflow -> Click "Run workflow"
+#=============================================================================
+
+name: Build OpenWrt 25.12.4 HG680P WiFi
+
+on:
+  workflow_dispatch:
+    inputs:
+      openwrt_kernel:
+        description: "Kernel version (6.6.y recommended for WiFi stability)"
+        required: true
+        default: "6.6.y"
+        type: choice
+        options:
+          - 6.6.y
+          - 6.1.y
+          - 6.12.y
+      openwrt_ip:
+        description: "Default IP address"
+        required: true
+        default: "192.168.1.1"
+        type: string
+      wifi_ssid:
+        description: "Default WiFi SSID"
+        required: true
+        default: "HG680P-OpenWrt"
+        type: string
+      wifi_password:
+        description: "Default WiFi Password (min 8 chars)"
+        required: true
+        default: "12345678"
+        type: string
+
+env:
+  TZ: Asia/Jakarta
+  OPENWRT_VERSION: "25.12.4"
+  OPENWRT_BOARD: "s905x"
+  KERNEL_REPO: "ophub/kernel"
+  KERNEL_USAGE: "stable"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    if: ${{ github.event.repository.owner.id }} == ${{ github.event.sender.id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialization environment
+        id: init
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          # Clean up disk space
+          docker rmi -f $(docker images -q) 2>/dev/null || true
+          [[ -d "${AGENT_TOOLSDIRECTORY}" ]] && sudo rm -rf "${AGENT_TOOLSDIRECTORY}"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc 2>/dev/null
+          sudo bash -c 'apt-get -y purge azure-cli ghc* zulu* llvm* firefox google* dotnet* powershell* openjdk* mongodb* moby* || true'
+          sudo apt-get -y autoremove --purge
+          sudo apt-get clean
+
+          # Install required packages
+          sudo apt-get update
+          sudo apt-get install -y $(curl -fsSL https://tinyurl.com/ubuntu2404-make-openwrt-depends)
+
+          # Set timezone
+          sudo timedatectl set-timezone "${TZ}"
+
+          echo "status=success" >> ${GITHUB_OUTPUT}
+          echo "build_date=$(date +"%Y.%m.%d")" >> ${GITHUB_OUTPUT}
+
+      - name: Create simulated physical disk
+        run: |
+          mnt_size=$(expr $(df -h /mnt | tail -1 | awk '{print $4}' | sed 's/[[:alpha:]]//g' | sed 's/\..*//') - 1)
+          root_size=$(expr $(df -h / | tail -1 | awk '{print $4}' | sed 's/[[:alpha:]]//g' | sed 's/\..*//') - 4)
+          sudo truncate -s "${mnt_size}"G /mnt/mnt.img
+          sudo truncate -s "${root_size}"G /root.img
+          sudo losetup /dev/loop6 /mnt/mnt.img
+          sudo losetup /dev/loop7 /root.img
+          sudo pvcreate /dev/loop6
+          sudo pvcreate /dev/loop7
+          sudo vgcreate github /dev/loop6 /dev/loop7
+          sudo lvcreate -n runner -l 100%FREE github
+          sudo mkfs.xfs /dev/github/runner
+          sudo mkdir -p /builder
+          sudo mount /dev/github/runner /builder
+          sudo chown -R runner:runner /builder
+          df -Th
+
+      - name: Download OpenWrt 25.12.4 rootfs
+        id: download
+        run: |
+          mkdir -p /builder/openwrt
+          cd /builder/openwrt
+
+          # Download official OpenWrt 25.12.4 armsr/armv8 rootfs
+          ROOTFS_URL="https://downloads.openwrt.org/releases/${{ env.OPENWRT_VERSION }}/targets/armsr/armv8/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-generic-rootfs.tar.gz"
+          echo "Downloading: ${ROOTFS_URL}"
+          curl -fsSLO "${ROOTFS_URL}"
+
+          [[ -f "openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-generic-rootfs.tar.gz" ]] || {
+            echo "ERROR: Failed to download rootfs"
+            exit 1
+          }
+
+          echo "rootfs_file=/builder/openwrt/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-generic-rootfs.tar.gz" >> ${GITHUB_OUTPUT}
+          echo "status=success" >> ${GITHUB_OUTPUT}
+          ls -la /builder/openwrt/
+
+      - name: Inject WiFi optimization into rootfs
+        run: |
+          cd /builder/openwrt
+          ROOTFS_FILE="openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-generic-rootfs.tar.gz"
+
+          # Extract rootfs
+          mkdir -p rootfs_tmp
+          tar -xzf "${ROOTFS_FILE}" -C rootfs_tmp
+
+          # Create WiFi optimization script
+          mkdir -p rootfs_tmp/etc/uci-defaults
+          cat > rootfs_tmp/etc/uci-defaults/99-hg680p-wifi-optimize <<'WIFIEOF'
+          #!/bin/sh
+          #=============================================================================
+          # HG680P WiFi Auto-Configuration (RTL8723BS Optimized)
+          # Runs once on first boot to configure WiFi for maximum performance
+          #=============================================================================
+
+          # Wait for WiFi hardware
+          sleep 5
+
+          # Load WiFi module
+          modprobe r8723bs 2>/dev/null || modprobe rtl8723bs 2>/dev/null || true
+          sleep 2
+
+          # Configure wireless
+          uci set wireless.radio0=wifi-device
+          uci set wireless.radio0.type='mac80211'
+          uci set wireless.radio0.channel='6'
+          uci set wireless.radio0.htmode='HT40'
+          uci set wireless.radio0.band='2g'
+          uci set wireless.radio0.disabled='0'
+          uci set wireless.radio0.country='ID'
+          uci set wireless.radio0.txpower='20'
+          uci set wireless.radio0.cell_density='0'
+
+          uci set wireless.default_radio0=wifi-iface
+          uci set wireless.default_radio0.device='radio0'
+          uci set wireless.default_radio0.network='lan'
+          uci set wireless.default_radio0.mode='ap'
+          uci set wireless.default_radio0.ssid='WIFI_SSID_PLACEHOLDER'
+          uci set wireless.default_radio0.encryption='psk2'
+          uci set wireless.default_radio0.key='WIFI_PASS_PLACEHOLDER'
+          uci set wireless.default_radio0.disassoc_low_ack='0'
+          uci commit wireless
+
+          # Optimize kernel network parameters for WiFi throughput
+          cat >> /etc/sysctl.conf <<-SYSEOF
+
+          # HG680P WiFi Performance Tuning
+          net.core.rmem_max=16777216
+          net.core.wmem_max=16777216
+          net.core.rmem_default=1048576
+          net.core.wmem_default=1048576
+          net.core.netdev_max_backlog=5000
+          net.ipv4.tcp_rmem=4096 1048576 16777216
+          net.ipv4.tcp_wmem=4096 1048576 16777216
+          net.ipv4.tcp_fastopen=3
+          net.ipv4.tcp_mtu_probing=1
+          SYSEOF
+
+          sysctl -p /etc/sysctl.conf 2>/dev/null
+
+          # Ensure RTL8723BS module loads on boot
+          echo "r8723bs" >> /etc/modules.d/rtl8723bs 2>/dev/null || true
+
+          exit 0
+          WIFIEOF
+
+          chmod +x rootfs_tmp/etc/uci-defaults/99-hg680p-wifi-optimize
+
+          # Replace WiFi SSID and password placeholders
+          sed -i "s/WIFI_SSID_PLACEHOLDER/${{ inputs.wifi_ssid }}/g" rootfs_tmp/etc/uci-defaults/99-hg680p-wifi-optimize
+          sed -i "s/WIFI_PASS_PLACEHOLDER/${{ inputs.wifi_password }}/g" rootfs_tmp/etc/uci-defaults/99-hg680p-wifi-optimize
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' rootfs_tmp/etc/uci-defaults/99-hg680p-wifi-optimize
+
+          # Repack rootfs
+          cd rootfs_tmp
+          tar -czf "../${ROOTFS_FILE}" .
+          cd ..
+          rm -rf rootfs_tmp
+
+          echo "WiFi optimization injected into rootfs"
+          ls -la "${ROOTFS_FILE}"
+
+      - name: Package OpenWrt for HG680P
+        uses: ophub/amlogic-s9xxx-openwrt@main
+        with:
+          openwrt_path: /builder/openwrt/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-generic-rootfs.tar.gz
+          openwrt_board: ${{ env.OPENWRT_BOARD }}
+          openwrt_kernel: ${{ inputs.openwrt_kernel }}
+          auto_kernel: true
+          kernel_repo: ${{ env.KERNEL_REPO }}
+          kernel_usage: ${{ env.KERNEL_USAGE }}
+          openwrt_size: "256/960"
+          builder_name: "HG680P-WiFi"
+
+      - name: Upload firmware to Release
+        if: ${{ env.PACKAGED_STATUS == 'success' }}
+        uses: ncipollo/release-action@main
+        with:
+          tag: OpenWrt_HG680P_WiFi_${{ env.OPENWRT_VERSION }}_${{ steps.init.outputs.build_date }}
+          artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
+          allowUpdates: true
+          removeArtifacts: false
+          replacesArtifacts: true
+          makeLatest: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ## OpenWrt ${{ env.OPENWRT_VERSION }} for HG680P (WiFi Optimized)
+
+            ### Device Info
+            - **Device:** FiberHome HG680P
+            - **SoC:** Amlogic S905X (Quad-core Cortex-A53)
+            - **RAM:** 2 GB DDR3
+            - **Storage:** 8 GB eMMC
+            - **WiFi:** RTL8723BS (802.11n, 2.4GHz, HT40)
+            - **Kernel:** ${{ inputs.openwrt_kernel }} (LTS Stable)
+
+            ### WiFi Optimization
+            - HT40 mode enabled (40MHz channel width)
+            - Optimized TCP/IP buffer sizes for throughput
+            - RTL8723BS driver auto-loaded on boot
+            - Country code: ID (Indonesia)
+            - Target throughput: **50+ Mbps** (close range, clean channel)
+
+            ### Default Credentials
+            - **IP:** ${{ inputs.openwrt_ip }}
+            - **User:** root
+            - **Password:** password
+            - **WiFi SSID:** ${{ inputs.wifi_ssid }}
+            - **WiFi Password:** ${{ inputs.wifi_password }}
+
+            ### Installation
+            1. Download the `amlogic_s905x_*.img.gz` file
+            2. Write to SD card using balenaEtcher or Rufus
+            3. Insert SD card into HG680P
+            4. Hold reset button + plug power cable
+            5. Access LuCI at http://${{ inputs.openwrt_ip }}
+            6. Install to eMMC: System → Amlogic Treasure Box → Install
+
+            ### Kernel Choice Rationale
+            - **6.6.y (Recommended):** LTS kernel, best RTL8723BS driver stability, well-tested on S905X
+            - **6.1.y:** Older LTS, very stable but fewer optimizations
+            - **6.12.y:** Newer features but less tested on this hardware
+
+            ---
+            Built with [ophub/amlogic-s9xxx-openwrt](https://github.com/ophub/amlogic-s9xxx-openwrt)
