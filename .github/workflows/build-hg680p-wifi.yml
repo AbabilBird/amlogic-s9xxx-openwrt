@@ -101,23 +101,23 @@ jobs:
           cd /builder/openwrt
 
           # Download official OpenWrt 25.12.4 armsr/armv8 rootfs
-          ROOTFS_URL="https://downloads.openwrt.org/releases/${{ env.OPENWRT_VERSION }}/targets/armsr/armv8/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-generic-rootfs.tar.gz"
+          ROOTFS_URL="https://downloads.openwrt.org/releases/${{ env.OPENWRT_VERSION }}/targets/armsr/armv8/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-rootfs.tar.gz"
           echo "Downloading: ${ROOTFS_URL}"
           curl -fsSLO "${ROOTFS_URL}"
 
-          [[ -f "openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-generic-rootfs.tar.gz" ]] || {
+          [[ -f "openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-rootfs.tar.gz" ]] || {
             echo "ERROR: Failed to download rootfs"
             exit 1
           }
 
-          echo "rootfs_file=/builder/openwrt/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-generic-rootfs.tar.gz" >> ${GITHUB_OUTPUT}
+          echo "rootfs_file=/builder/openwrt/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-rootfs.tar.gz" >> ${GITHUB_OUTPUT}
           echo "status=success" >> ${GITHUB_OUTPUT}
           ls -la /builder/openwrt/
 
       - name: Inject WiFi optimization into rootfs
         run: |
           cd /builder/openwrt
-          ROOTFS_FILE="openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-generic-rootfs.tar.gz"
+          ROOTFS_FILE="openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-rootfs.tar.gz"
 
           # Extract rootfs
           mkdir -p rootfs_tmp
@@ -204,7 +204,7 @@ jobs:
       - name: Package OpenWrt for HG680P
         uses: ophub/amlogic-s9xxx-openwrt@main
         with:
-          openwrt_path: /builder/openwrt/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-generic-rootfs.tar.gz
+          openwrt_path: /builder/openwrt/openwrt-${{ env.OPENWRT_VERSION }}-armsr-armv8-rootfs.tar.gz
           openwrt_board: ${{ env.OPENWRT_BOARD }}
           openwrt_kernel: ${{ inputs.openwrt_kernel }}
           auto_kernel: true
