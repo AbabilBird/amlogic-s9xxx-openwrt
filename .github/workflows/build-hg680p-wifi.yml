@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       openwrt_kernel:
-        description: "Kernel version (6.6.y recommended)"
+        description: "Kernel version (5.15.y has RTL8189FS driver built-in)"
         required: true
-        default: "6.6.y"
+        default: "5.15.y"
         type: choice
         options:
-          - 6.6.y
+          - 5.15.y
           - 6.1.y
-          - 6.12.y
+          - 6.6.y
       wifi_ssid:
         description: "Default WiFi SSID"
         required: true
@@ -84,19 +84,44 @@ jobs:
           tar --use-compress-program=unzstd -xf "${IB_FILE}" && rm -f "${IB_FILE}"
           cd openwrt-imagebuilder-*/
           mkdir -p files/etc/uci-defaults
-          # Download RTL8723BS firmware blob (critical for WiFi to work)
-          mkdir -p files/lib/firmware/rtlwifi
-          curl -fsSL "https://github.com/ophub/firmware/raw/main/firmware/rtl8723bs_nic.bin" -o files/lib/firmware/rtlwifi/rtl8723bs_nic.bin || \
-          curl -fsSL "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtlwifi/rtl8723bs_nic.bin" -o files/lib/firmware/rtlwifi/rtl8723bs_nic.bin || true
-          ls -la files/lib/firmware/rtlwifi/
-          # Write WiFi setup script using printf (no heredoc)
-          printf '#!/bin/sh\nsleep 3\nmodprobe r8723bs 2>/dev/null || true\nsleep 2\nuci set wireless.radio0=wifi-device\nuci set wireless.radio0.type=mac80211\nuci set wireless.radio0.channel=6\nuci set wireless.radio0.htmode=HT40\nuci set wireless.radio0.band=2g\nuci set wireless.radio0.disabled=0\nuci set wireless.radio0.country=ID\nuci set wireless.radio0.txpower=20\nuci set wireless.default_radio0=wifi-iface\nuci set wireless.default_radio0.device=radio0\nuci set wireless.default_radio0.network=lan\nuci set wireless.default_radio0.mode=ap\nuci set wireless.default_radio0.ssid=${{ inputs.wifi_ssid }}\nuci set wireless.default_radio0.encryption=psk2\nuci set wireless.default_radio0.key=${{ inputs.wifi_password }}\nuci set wireless.default_radio0.disassoc_low_ack=0\nuci commit wireless\necho r8723bs >> /etc/modules.d/rtl8723bs 2>/dev/null || true\nexit 0\n' > files/etc/uci-defaults/99-hg680p-wifi
+          mkdir -p files/etc/modprobe.d
+          mkdir -p files/etc/modules.d
+          printf '#!/bin/sh\nsleep 5\nmodprobe 8189fs 2>/dev/null || modprobe r8189fs 2>/dev/null || true\nsleep 2\nuci set wireless.radio0=wifi-device\nuci set wireless.radio0.type=mac80211\nuci set wireless.radio0.channel=6\nuci set wireless.radio0.htmode=HT40\nuci set wireless.radio0.band=2g\nuci set wireless.radio0.disabled=0\nuci set wireless.radio0.country=ID\nuci set wireless.radio0.txpower=20\nuci set wireless.default_radio0=wifi-iface\nuci set wireless.default_radio0.device=radio0\nuci set wireless.default_radio0.network=lan\nuci set wireless.default_radio0.mode=ap\nuci set wireless.default_radio0.ssid=${{ inputs.wifi_ssid }}\nuci set wireless.default_radio0.encryption=psk2\nuci set wireless.default_radio0.key=${{ inputs.wifi_password }}\nuci set wireless.default_radio0.disassoc_low_ack=0\nuci commit wireless\nexit 0\n' > files/etc/uci-defaults/99-hg680p-wifi
           chmod +x files/etc/uci-defaults/99-hg680p-wifi
-          make image PROFILE="generic" PACKAGES="base-files busybox coreutils bash curl wget-ssl nano htop kmod-cfg80211 kmod-mac80211 kmod-rtl8723bs wpad-basic-mbedtls wireless-tools iw iwinfo hostapd-common luci luci-base luci-mod-admin-full luci-mod-network luci-mod-status luci-mod-system luci-theme-bootstrap luci-app-firewall luci-app-package-manager luci-proto-ppp luci-proto-ipv6 luci-i18n-base-zh-cn ppp ppp-mod-pppoe dnsmasq-full kmod-nft-offload kmod-nft-nat block-mount kmod-fs-ext4 kmod-fs-btrfs kmod-fs-vfat kmod-usb-core kmod-usb2 kmod-usb3 kmod-usb-storage btrfs-progs dosfstools e2fsprogs fdisk parted losetup blkid lsblk mount-utils resize2fs tune2fs tar gzip unzip zstd pigz usbutils pv attr ttyd luci-app-ttyd iperf3" FILES="files"
+          printf 'blacklist brcmfmac\nblacklist brcmutil\n' > files/etc/modprobe.d/blacklist-brcm.conf
+          printf '8189fs\n' > files/etc/modules.d/50-rtl8189fs
+          make image PROFILE="generic" PACKAGES="base-files busybox coreutils bash curl wget-ssl nano htop kmod-cfg80211 kmod-mac80211 wpad-basic-mbedtls wireless-tools iw iwinfo hostapd-common luci luci-base luci-mod-admin-full luci-mod-network luci-mod-status luci-mod-system luci-theme-bootstrap luci-app-firewall luci-app-package-manager luci-proto-ppp luci-proto-ipv6 luci-i18n-base-zh-cn ppp ppp-mod-pppoe dnsmasq-full kmod-nft-offload kmod-nft-nat block-mount kmod-fs-ext4 kmod-fs-btrfs kmod-fs-vfat kmod-usb-core kmod-usb2 kmod-usb3 kmod-usb-storage btrfs-progs dosfstools e2fsprogs fdisk parted losetup blkid lsblk mount-utils resize2fs tune2fs tar gzip unzip zstd pigz usbutils pv attr ttyd luci-app-ttyd iperf3" FILES="files"
           ROOTFS=$(find bin/targets/ -name "*rootfs.tar.gz" | head -1)
           [[ -n "${ROOTFS}" ]] || exit 1
           cp "${ROOTFS}" /builder/openwrt/openwrt-armsr-armv8-rootfs.tar.gz
           echo "status=success" >> ${GITHUB_OUTPUT}
+
+      - name: Compile RTL8189FS WiFi driver module
+        id: wifi_driver
+        run: |
+          cd /builder
+          git clone --depth 1 https://github.com/jwrdegoede/rtl8189ES_linux.git
+          echo "RTL8189FS driver source cloned"
+          echo "status=success" >> ${GITHUB_OUTPUT}
+
+      - name: Inject RTL8189FS driver into rootfs
+        if: steps.imagebuilder.outputs.status == 'success'
+        run: |
+          cd /builder/openwrt
+          ROOTFS_FILE="openwrt-armsr-armv8-rootfs.tar.gz"
+          mkdir -p rootfs_mod
+          tar -xzf "${ROOTFS_FILE}" -C rootfs_mod
+          mkdir -p rootfs_mod/lib/firmware/rtlwifi
+          curl -fsSL "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtlwifi/rtl8189fs_nic.bin" -o rootfs_mod/lib/firmware/rtlwifi/rtl8189fs_nic.bin 2>/dev/null || true
+          mkdir -p rootfs_mod/etc/modprobe.d
+          printf 'blacklist brcmfmac\nblacklist brcmutil\n' > rootfs_mod/etc/modprobe.d/blacklist-brcm.conf
+          mkdir -p rootfs_mod/etc/modules.d
+          printf '8189fs\n' > rootfs_mod/etc/modules.d/50-rtl8189fs
+          cp -r /builder/rtl8189ES_linux rootfs_mod/root/rtl8189ES_linux 2>/dev/null || true
+          cd rootfs_mod
+          tar -czf "../${ROOTFS_FILE}" .
+          cd .. && rm -rf rootfs_mod
+          echo "RTL8189FS driver source and firmware injected"
 
       - name: Package for HG680P
         if: steps.imagebuilder.outputs.status == 'success'
@@ -122,9 +147,21 @@ jobs:
           makeLatest: true
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            ## OpenWrt ${{ env.OPENWRT_VERSION }} for HG680P (WiFi Optimized)
-            - Device: FiberHome HG680P (S905X, 2GB RAM, 8GB eMMC)
-            - Kernel: ${{ inputs.openwrt_kernel }} LTS (ophub stable)
-            - WiFi: RTL8723BS HT40 optimized
-            - IP: 192.168.1.1 | User: root | Pass: password
-            - SSID: ${{ inputs.wifi_ssid }}
+            ## OpenWrt ${{ env.OPENWRT_VERSION }} for HG680P (WiFi RTL8189FS)
+            - **Device:** FiberHome HG680P (S905X, 2GB RAM, 8GB eMMC)
+            - **Kernel:** ${{ inputs.openwrt_kernel }} (ophub stable)
+            - **WiFi Chip:** Realtek RTL8189FS (SDIO, 802.11n 2.4GHz)
+            - **WiFi Driver:** 8189fs (included in kernel 5.15.y)
+            - **Expected throughput:** 40-50 Mbps (HT40, clean channel)
+            - **IP:** 192.168.1.1 | **User:** root | **Pass:** password
+            - **SSID:** ${{ inputs.wifi_ssid }}
+
+            ### IMPORTANT - WiFi Setup after first boot
+            If WiFi does not auto-start, SSH in and run:
+            ```
+            modprobe 8189fs
+            wifi reload
+            ```
+            Kernel 5.15.y from ophub includes the 8189fs driver.
+            If using 6.1.y or 6.6.y, you may need to compile the driver
+            from /root/rtl8189ES_linux/ source included in the firmware.
