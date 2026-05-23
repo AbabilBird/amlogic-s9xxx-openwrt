@@ -37,6 +37,9 @@ on:
         default: "12345678"
         type: string
 
+permissions:
+  contents: write
+
 env:
   TZ: Asia/Jakarta
   OPENWRT_VERSION: "25.12.4"
@@ -55,7 +58,10 @@ jobs:
 
       - name: Initialization environment
         id: init
-        env:
+        permissions:
+  contents: write
+
+env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           # Clean up disk space
