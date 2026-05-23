@@ -210,7 +210,7 @@ jobs:
           auto_kernel: true
           kernel_repo: ${{ env.KERNEL_REPO }}
           kernel_usage: ${{ env.KERNEL_USAGE }}
-          openwrt_size: "256/960"
+          openwrt_size: "256/1024"
           builder_name: "HG680P-WiFi"
 
       - name: Upload firmware to Release
