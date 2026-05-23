@@ -1,4 +1,4 @@
-﻿#=============================================================================
+#=============================================================================
 # Description: Build OpenWrt 25.12.4 for HG680P with WiFi Optimization
 # Device: FiberHome HG680P (Amlogic S905X, 2GB RAM, 8GB eMMC)
 # WiFi: RTL8723BS patched kernel for stable 50Mbps throughput
